@@ -25,4 +25,6 @@
     <string name="auth_button">Sunucu şifresini gir</string>
     <string name="auth_error_title">Sunucu şifresi gerekiyor</string>
     <string name="auth_error_message">Sunucu kimlik doğrulaması istedi. Varsayılan şifre “opencode-local” olmalı. Sunucu başka bir şifreyle başlatıldıysa “Sunucu şifresini gir” düğmesini kullan ya da uygulamayı sunucuyu kendisi başlatsın.</string>
+
+    <string name="file_picker_failed">Dosya seçici açılamadı</string>
 </resources>

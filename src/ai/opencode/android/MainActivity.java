@@ -3,6 +3,7 @@ package ai.opencode.android;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
 import android.content.ComponentName;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -19,6 +20,7 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.webkit.DownloadListener;
 import android.webkit.HttpAuthHandler;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -89,6 +91,9 @@ public class MainActivity extends Activity {
     private static final long RETRY_INTERVAL_MS = 2500L;
     private static final int MAX_RETRY_ATTEMPTS = 48;
 
+    /** WebView dosya seçicisi (sohbet'e dosya ekleme) için istek kodu. */
+    private static final int REQUEST_FILE_CHOOSER = 4242;
+
     private WebView web;
     private ProgressBar progress;
     private LinearLayout errorView;
@@ -119,6 +124,9 @@ public class MainActivity extends Activity {
     private boolean lastMainFrameError = false;
     private boolean waitingForServer = false;
     private int retryAttempts = 0;
+
+    /** Bekleyen dosya seçici sonucu (WebView'a iletilecek). */
+    private ValueCallback<Uri[]> fileChooserCallback;
 
     private final Runnable retryRunnable = new Runnable() {
         @Override
@@ -260,7 +268,7 @@ public class MainActivity extends Activity {
     private void showCrash(Throwable t) {
         StringWriter trace = new StringWriter();
         t.printStackTrace(new PrintWriter(trace));
-        final String report = "v1.0.5\n"
+        final String report = "v1.0.6\n"
                 + t.getClass().getName() + ": " + t.getMessage()
                 + "\n\n" + trace.toString();
 
@@ -1013,11 +1021,85 @@ public class MainActivity extends Activity {
             progress.setProgress(newProgress);
             progress.setVisibility(newProgress >= 100 ? View.GONE : View.VISIBLE);
         }
+
+        /**
+         * Sohbet'e dosya ekleme: arayüzdeki ekle düğmesi bir
+         * input[type=file] açar; WebView bunu ancak burada ele alırsak
+         * çalıştırır. Seçilen dosya(lar) arayüze URI olarak iletilir ve
+         * yükleme proxy üzerinden (kimlik bilgisi eklenmiş) gider.
+         */
+        @Override
+        public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
+                FileChooserParams params) {
+            if (fileChooserCallback != null) {
+                // Askıda kalan önceki seçiciyi iptal et.
+                fileChooserCallback.onReceiveValue(null);
+            }
+            fileChooserCallback = callback;
+
+            Intent intent = null;
+            try {
+                intent = params.createIntent();
+            } catch (Throwable ignored) {
+                intent = null;
+            }
+            if (intent == null
+                    || intent.resolveActivity(getPackageManager()) == null) {
+                intent = new Intent(Intent.ACTION_GET_CONTENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("*/*");
+                if (params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                }
+            }
+            try {
+                startActivityForResult(intent, REQUEST_FILE_CHOOSER);
+                return true;
+            } catch (Throwable t) {
+                fileChooserCallback = null;
+                callback.onReceiveValue(null);
+                Toast.makeText(MainActivity.this,
+                        R.string.file_picker_failed, Toast.LENGTH_SHORT).show();
+                return false;
+            }
+        }
     }
 
     // ----------------------------------------------------------------------
     // Yaşam döngüsü
     // ----------------------------------------------------------------------
+
+    /** Dosya seçici sonucunu WebView'a iletir (iptal edilse bile). */
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == REQUEST_FILE_CHOOSER) {
+            ValueCallback<Uri[]> callback = fileChooserCallback;
+            fileChooserCallback = null;
+            if (callback == null) {
+                return;
+            }
+            Uri[] results = null;
+            if (resultCode == RESULT_OK && data != null) {
+                if (data.getData() != null) {
+                    results = new Uri[] { data.getData() };
+                } else if (data.getClipData() != null) {
+                    ClipData clip = data.getClipData();
+                    int count = clip.getItemCount();
+                    if (count > 0) {
+                        results = new Uri[count];
+                        for (int i = 0; i < count; i++) {
+                            results[i] = clip.getItemAt(i).getUri();
+                        }
+                    }
+                }
+            }
+            // Sonuç null olursa arayüz "iptal edildi" sayar; null göndermek
+            // zorunludur, yoksa bir daha dosya seçici açılamaz.
+            callback.onReceiveValue(results);
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
+    }
 
     @Override
     public void onBackPressed() {
