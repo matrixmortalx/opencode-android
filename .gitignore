@@ -1,0 +1,16 @@
+# Derleme çıktıları
+build/
+OpenCode.apk
+
+# Android platform kütüphanesi (derleme sırasında indirilir, ~27 MB)
+android.jar
+
+# İmzalama anahtarı (asla depoya girmemeli!)
+debug.keystore
+*.keystore
+*.jks
+
+# Genel
+*.log
+.DS_Store
+__pycache__/

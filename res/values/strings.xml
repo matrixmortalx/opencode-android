@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OpenCode</string>
+
+    <string name="error_title">OpenCode sunucusuna ulaşılamadı</string>
+    <string name="error_message">http://127.0.0.1:4096 adresindeki OpenCode sunucusu şu an çalışmıyor.\n\nSunucuyu Termux’tan başlatmak için aşağıdaki düğmeyi kullanabilirsin.</string>
+
+    <string name="waiting_title">Sunucuya bağlanılıyor…</string>
+    <string name="waiting_message">Termux’ta OpenCode sunucusu başlatılıyor.\nHazır olduğunda bu ekran kendiliğinden kapanacak.</string>
+    <string name="waiting_counter">Deneniyor… (deneme %1$d)</string>
+
+    <string name="start_server">Sunucuyu Termux’ta başlat ▶</string>
+    <string name="retry">Yenile</string>
+    <string name="termux_started">Termux’a başlatma komutu gönderildi</string>
+
+    <string name="start_failed">Termux başlatılamadı</string>
+    <string name="manual_hint">Termux’u elle aç ve şunu çalıştır:\nopencode serve\n\nAlternatif: README’deki kurulum adımlarıyla serve-android.sh betiğini kur.</string>
+    <string name="timeout_message">Sunucu makul sürede yanıt vermedi.\nTermux’u açıp ‘opencode serve’ komutunu elle çalıştırmayı dene.\n\nİpucu: Otomatik başlatmanın çalışması için Termux’ta allow-external-apps = true ayarı ve serve-android.sh betiği gerekir (README’ye bak).</string>
+</resources>
