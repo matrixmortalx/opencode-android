@@ -212,7 +212,7 @@ public class MainActivity extends Activity {
     private void showCrash(Throwable t) {
         StringWriter trace = new StringWriter();
         t.printStackTrace(new PrintWriter(trace));
-        final String report = "v1.0.2\n"
+        final String report = "v1.0.3\n"
                 + t.getClass().getName() + ": " + t.getMessage()
                 + "\n\n" + trace.toString();
 
@@ -278,13 +278,13 @@ public class MainActivity extends Activity {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                boolean delivered = false;
+                String failure = null;
                 try {
                     String payload = Base64.encodeToString(
                             report.getBytes("UTF-8"),
                             Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
-                    if (payload.length() > 3000) {
-                        payload = payload.substring(0, 3000);
+                    if (payload.length() > 1800) {
+                        payload = payload.substring(0, 1800);
                     }
                     URL url = new URL(BASE_URL + "api/android-crash-report/" + payload);
                     HttpURLConnection connection =
@@ -294,16 +294,18 @@ public class MainActivity extends Activity {
                     connection.connect();
                     connection.getResponseCode(); // 404/401 olsa bile istek günlüğe düşer
                     connection.disconnect();
-                    delivered = true;
-                } catch (Throwable ignored) {
-                    // Rapor gönderilemezse ekran zaten kullanıcıya açık.
+                } catch (Throwable sendFailure) {
+                    failure = sendFailure.getClass().getSimpleName()
+                            + (sendFailure.getMessage() != null
+                                    ? ": " + sendFailure.getMessage()
+                                    : "");
                 }
-                markReportSent(delivered);
+                markReportSent(failure);
             }
         }, "crash-reporter").start();
     }
 
-    private void markReportSent(final boolean delivered) {
+    private void markReportSent(final String failure) {
         final TextView view = crashView;
         if (view == null) {
             return;
@@ -311,9 +313,9 @@ public class MainActivity extends Activity {
         view.post(new Runnable() {
             @Override
             public void run() {
-                view.append(delivered
+                view.append(failure == null
                         ? "\n\n✔ Rapor sunucuya gönderildi."
-                        : "\n\n✖ Rapor sunucuya gönderilemedi.");
+                        : "\n\n✖ Rapor gönderilemedi: " + failure);
             }
         });
     }
@@ -397,7 +399,12 @@ public class MainActivity extends Activity {
         waitingText.setPadding(0, dp(20), 0, 0);
         box.addView(waitingText);
 
-        showError(null);
+        // NOT: Burada showError() çağırılamaz! errorView alanı bu metod
+        // dönünce atanır; showError içinde errorView.setVisibility(...)
+        // yapıldığından null referans hatası (NPE) oluşur. Başlangıç
+        // metinleri doğrudan ayarlanır.
+        errorTitle.setText(R.string.error_title);
+        errorMessage.setText(R.string.error_message);
         return box;
     }
 
@@ -423,6 +430,9 @@ public class MainActivity extends Activity {
     // ----------------------------------------------------------------------
 
     private void showWaiting() {
+        if (errorTitle == null || errorView == null) {
+            return;
+        }
         errorTitle.setText(R.string.waiting_title);
         errorMessage.setText(R.string.waiting_message);
         waitingText.setText(getString(R.string.waiting_counter, 0));
@@ -433,6 +443,9 @@ public class MainActivity extends Activity {
     }
 
     private void showError(String message) {
+        if (errorTitle == null || errorView == null) {
+            return;
+        }
         errorTitle.setText(R.string.error_title);
         errorMessage.setText(message != null
                 ? message
@@ -448,6 +461,9 @@ public class MainActivity extends Activity {
         waitingForServer = false;
         retryAttempts = 0;
         handler.removeCallbacks(retryRunnable);
+        if (errorView == null) {
+            return;
+        }
         errorView.setVisibility(View.GONE);
         fab.setVisibility(View.VISIBLE);
     }
