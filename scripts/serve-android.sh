@@ -14,12 +14,19 @@ set -u
 HOST=127.0.0.1
 PORT=4096
 
+# Uygulamanın otomatik kullandığı sabit sunucu şifresi. Sunucu yalnızca
+# loopback'e (127.0.0.1) açık olduğu için bu şifre yereldir. Değiştirirsen
+# uygulamada da "Sunucu şifresini gir" ile aynı değeri kullan.
+OPENCODE_PASSWORD="${OPENCODE_PASSWORD:-opencode-local}"
+export OPENCODE_PASSWORD
+
 # Ekran kapanınca Android'in Termux'u uyutmasını engellemeye çalış.
 command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock >/dev/null 2>&1 || true
 
-# Sunucu zaten çalışıyorsa dokunma.
+# Sunucu zaten çalışıyorsa ve şifre tutuyorsa dokunma.
 if command -v curl >/dev/null 2>&1 \
-   && curl -s -o /dev/null --max-time 2 "http://${HOST}:${PORT}/"; then
+   && curl -sf -o /dev/null --max-time 2 -u "opencode:${OPENCODE_PASSWORD}" \
+        "http://${HOST}:${PORT}/api/info"; then
   echo "✔ OpenCode sunucusu zaten çalışıyor: http://${HOST}:${PORT}"
   sleep 2
   exit 0

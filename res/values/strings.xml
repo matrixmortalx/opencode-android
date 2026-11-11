@@ -17,4 +17,12 @@
     <string name="start_failed">Termux başlatılamadı</string>
     <string name="manual_hint">Termux’u elle aç ve şunu çalıştır:\nopencode serve\n\nAlternatif: README’deki kurulum adımlarıyla serve-android.sh betiğini kur.</string>
     <string name="timeout_message">Sunucu makul sürede yanıt vermedi.\nTermux’u açıp ‘opencode serve’ komutunu elle çalıştırmayı dene.\n\nİpucu: Otomatik başlatmanın çalışması için Termux’ta allow-external-apps = true ayarı ve serve-android.sh betiği gerekir (README’ye bak).</string>
+
+    <string name="auth_title">Sunucu şifresi</string>
+    <string name="auth_message">OpenCode sunucusunun şifresini gir.\n\nKullanıcı adı her zaman “opencode”. Varsayılan şifre “opencode-local”. Sunucu farklı bir şifreyle başlatıldıysa şifre, Termux’ta sunucu açılırken yazılan “server password …” satırındadır.</string>
+    <string name="auth_save">Kaydet ve bağlan</string>
+    <string name="auth_cancel">İptal</string>
+    <string name="auth_button">Sunucu şifresini gir</string>
+    <string name="auth_error_title">Sunucu şifresi gerekiyor</string>
+    <string name="auth_error_message">Sunucu kimlik doğrulaması istedi. Varsayılan şifre “opencode-local” olmalı. Sunucu başka bir şifreyle başlatıldıysa “Sunucu şifresini gir” düğmesini kullan ya da uygulamayı sunucuyu kendisi başlatsın.</string>
 </resources>

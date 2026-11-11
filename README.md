@@ -26,6 +26,30 @@ gerek yoktur.
   Termux’un `RUN_COMMAND` arayüzü ile sunucuyu ayağa kaldırır ve uygulama
   otomatik olarak bağlanmayı dener.
 
+### Sunucu şifresi (otomatik giriş)
+
+`opencode serve` normalde her açılışta rastgele bir şifre üretir. Uygulamanın
+şifre sormadan bağlanabilmesi için `serve-android.sh` sunucuyu **sabit bir
+şifreyle** başlatır:
+
+| Alan | Değer |
+|------|-------|
+| Kullanıcı adı | `opencode` |
+| Varsayılan şifre | `opencode-local` |
+
+Uygulama, API isteklerinde bu bilgileri HTTP Basic kimlik doğrulamasıyla
+otomatik gönderir. Sunucuyu elle farklı bir şifreyle başlattıysan uygulama
+şifre ekranını gösterir; **“Sunucu şifresini gir”** düğmesiyle şifreyi
+güncelleyebilirsin (uygulama şifreyi cihazda saklar).
+
+Kendi şifreni sabitlemek için Termux’ta:
+
+```bash
+OPENCODE_PASSWORD=benim-şifrem opencode serve --hostname 127.0.0.1 --port 4096
+```
+
+…ve uygulamada aynı şifreyi gir.
+
 ## Kurulum
 
 1. [Releases](../../releases) sayfasından `OpenCode.apk` dosyasını indir.

@@ -2,26 +2,33 @@ package ai.opencode.android;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ComponentName;
+import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.webkit.DownloadListener;
+import android.webkit.HttpAuthHandler;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.util.Base64;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -54,6 +61,13 @@ public class MainActivity extends Activity {
     private static final String TERMUX_HOME =
             "/data/data/com.termux/files/home";
 
+    /** HTTP Basic kimlik doğrulaması: kullanıcı adı her zaman sabittir. */
+    private static final String AUTH_USER = "opencode";
+    /** serve-android.sh betiğinin kullandığı varsayılan sunucu şifresi. */
+    private static final String DEFAULT_PASSWORD = "opencode-local";
+    private static final String PREFS_NAME = "opencode";
+    private static final String PREF_PASSWORD = "server_password";
+
     /** Sunucu kapalıyken otomatik yeniden deneme aralığı / üst sınırı. */
     private static final long RETRY_INTERVAL_MS = 2500L;
     private static final int MAX_RETRY_ATTEMPTS = 48;
@@ -67,7 +81,11 @@ public class MainActivity extends Activity {
     private TextView crashView;
     private Button startButton;
     private Button retryButton;
+    private Button authButton;
     private Button fab;
+
+    private SharedPreferences prefs;
+    private boolean authAttempted = false;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean lastMainFrameError = false;
@@ -105,6 +123,7 @@ public class MainActivity extends Activity {
     }
 
     private void setupUi() {
+        prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         Window window = getWindow();
         window.setStatusBarColor(0xFF0B0D10);
         window.setNavigationBarColor(0xFF0B0D10);
@@ -212,7 +231,7 @@ public class MainActivity extends Activity {
     private void showCrash(Throwable t) {
         StringWriter trace = new StringWriter();
         t.printStackTrace(new PrintWriter(trace));
-        final String report = "v1.0.3\n"
+        final String report = "v1.0.4\n"
                 + t.getClass().getName() + ": " + t.getMessage()
                 + "\n\n" + trace.toString();
 
@@ -392,6 +411,24 @@ public class MainActivity extends Activity {
         retryParams.topMargin = dp(10);
         box.addView(retryButton, retryParams);
 
+        authButton = new Button(this, null, android.R.attr.borderlessButtonStyle);
+        authButton.setText(R.string.auth_button);
+        authButton.setAllCaps(false);
+        authButton.setTextSize(14);
+        authButton.setTextColor(0xFF9BA8B7);
+        authButton.setPadding(dp(20), dp(8), dp(20), dp(8));
+        authButton.setVisibility(View.GONE);
+        authButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showPasswordDialog();
+            }
+        });
+        LinearLayout.LayoutParams authParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        authParams.topMargin = dp(4);
+        box.addView(authButton, authParams);
+
         waitingText = new TextView(this);
         waitingText.setTextSize(12);
         waitingText.setTextColor(0xFF2DD4BF);
@@ -453,8 +490,69 @@ public class MainActivity extends Activity {
         waitingText.setText("");
         startButton.setVisibility(View.VISIBLE);
         retryButton.setVisibility(View.VISIBLE);
+        authButton.setVisibility(View.GONE);
         errorView.setVisibility(View.VISIBLE);
         fab.setVisibility(View.GONE);
+    }
+
+    /** Sunucu 401 döndürdüğünde gösterilen, şifre düzenlemeye izin veren ekran. */
+    private void showAuthError() {
+        if (errorTitle == null || errorView == null) {
+            return;
+        }
+        waitingForServer = false;
+        errorTitle.setText(R.string.auth_error_title);
+        errorMessage.setText(R.string.auth_error_message);
+        waitingText.setText("");
+        startButton.setVisibility(View.GONE);
+        retryButton.setVisibility(View.VISIBLE);
+        authButton.setVisibility(View.VISIBLE);
+        errorView.setVisibility(View.VISIBLE);
+        fab.setVisibility(View.GONE);
+    }
+
+    /**
+     * Sunucu şifresini düzenleme penceresi. Şifre kaydedilince sayfa
+     * yeniden yüklenir ve yeni şifreyle otomatik giriş denenir.
+     */
+    private void showPasswordDialog() {
+        if (prefs == null) {
+            prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        }
+        final EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        String current = prefs.getString(PREF_PASSWORD, DEFAULT_PASSWORD);
+        input.setText(current);
+        input.setSelection(current.length());
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.auth_title)
+                .setMessage(R.string.auth_message)
+                .setView(input)
+                .setPositiveButton(R.string.auth_save,
+                        new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface d, int which) {
+                                String password = input.getText().toString();
+                                prefs.edit().putString(PREF_PASSWORD, password).apply();
+                                authAttempted = false;
+                                hideError();
+                                web.reload();
+                            }
+                        })
+                .setNegativeButton(R.string.auth_cancel,
+                        new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface d, int which) {
+                                authAttempted = false;
+                                showAuthError();
+                            }
+                        })
+                .setCancelable(false)
+                .create();
+        dialog.show();
     }
 
     private void hideError() {
@@ -522,6 +620,39 @@ public class MainActivity extends Activity {
         @Override
         public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
             lastMainFrameError = false;
+            authAttempted = false;
+        }
+
+        /**
+         * Sunucu HTTP Basic kimlik doğrulaması ister (kullanıcı adı: opencode).
+         * İlk denemede kayıtlı şifre otomatik gönderilir; şifre yanlışsa
+         * istek iptal edilir ve şifre giriş ekranı gösterilir.
+         */
+        @Override
+        public void onReceivedHttpAuthRequest(WebView view, HttpAuthHandler handler,
+                String host, String realm) {
+            if (!authAttempted) {
+                authAttempted = true;
+                String password = prefs != null
+                        ? prefs.getString(PREF_PASSWORD, DEFAULT_PASSWORD)
+                        : DEFAULT_PASSWORD;
+                handler.proceed(AUTH_USER, password);
+            } else {
+                // Otomatik deneme başarısız oldu: isteği iptal et ve kullanıcıdan
+                // şifre iste. Böylece üst üste şifre pencereleri açılmaz.
+                handler.cancel();
+                showAuthError();
+            }
+        }
+
+        @Override
+        public void onReceivedHttpError(WebView view, WebResourceRequest request,
+                WebResourceResponse errorResponse) {
+            if (request.isForMainFrame() && errorResponse.getStatusCode() == 401) {
+                // onPageFinished bu ekranı hemen gizlemesin.
+                lastMainFrameError = true;
+                showAuthError();
+            }
         }
 
         @Override
