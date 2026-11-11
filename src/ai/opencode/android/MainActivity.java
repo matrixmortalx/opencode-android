@@ -20,15 +20,19 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.util.Base64;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.net.HttpURLConnection;
+import java.net.URL;
 
 /**
  * OpenCode for Android
@@ -60,6 +64,7 @@ public class MainActivity extends Activity {
     private TextView errorTitle;
     private TextView errorMessage;
     private TextView waitingText;
+    private TextView crashView;
     private Button startButton;
     private Button retryButton;
     private Button fab;
@@ -207,17 +212,110 @@ public class MainActivity extends Activity {
     private void showCrash(Throwable t) {
         StringWriter trace = new StringWriter();
         t.printStackTrace(new PrintWriter(trace));
+        final String report = "v1.0.2\n"
+                + t.getClass().getName() + ": " + t.getMessage()
+                + "\n\n" + trace.toString();
 
-        TextView view = new TextView(this);
-        view.setBackgroundColor(0xFF140505);
-        view.setTextColor(0xFFFF7B72);
-        view.setTypeface(Typeface.MONOSPACE);
-        view.setTextSize(11);
-        view.setPadding(dp(12), dp(20), dp(12), dp(16));
-        view.setText("⚠ Uygulama bir hatayla karşılaştı.\n\n"
-                + "Sorunu çözmek için bu metni geliştiriciye ilet:\n\n"
-                + trace.toString());
-        setContentView(view);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackgroundColor(0xFF140505);
+
+        TextView title = new TextView(this);
+        title.setText("⚠ Uygulama bir hatayla karşılaştı");
+        title.setTextColor(0xFFFF7B72);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTextSize(16);
+        title.setPadding(dp(12), dp(16), dp(12), dp(4));
+        box.addView(title);
+
+        TextView hint = new TextView(this);
+        hint.setText("Hata raporu sunucuya gönderiliyor… (bu metni kopyalayıp da iletebilirsin)");
+        hint.setTextColor(0xFFB08585);
+        hint.setTextSize(12);
+        hint.setPadding(dp(12), 0, dp(12), dp(8));
+        box.addView(hint);
+
+        Button openBrowser = new Button(this, null, android.R.attr.borderlessButtonStyle);
+        openBrowser.setText(R.string.open_in_browser);
+        openBrowser.setAllCaps(false);
+        openBrowser.setTextColor(0xFF2DD4BF);
+        openBrowser.setPadding(dp(12), dp(6), dp(12), dp(6));
+        openBrowser.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(BASE_URL)));
+                } catch (Throwable ignored) {
+                    // Tarayıcı yoksa sessizce yoksay.
+                }
+            }
+        });
+        box.addView(openBrowser);
+
+        crashView = new TextView(this);
+        crashView.setTextColor(0xFFFF7B72);
+        crashView.setTypeface(Typeface.MONOSPACE);
+        crashView.setTextSize(10);
+        crashView.setText(report);
+        crashView.setTextIsSelectable(true);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(crashView);
+        box.addView(scroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+
+        setContentView(box);
+        sendCrashReport(report);
+    }
+
+    /**
+     * Çökme raporunu yerel OpenCode sunucusuna gönderir. Sunucu bu isteği
+     * ~/.local/share/opencode/log/opencode.log dosyasına kaydeder; rapor
+     * URL yoluna base64 olarak gömülür.
+     */
+    private void sendCrashReport(final String report) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                boolean delivered = false;
+                try {
+                    String payload = Base64.encodeToString(
+                            report.getBytes("UTF-8"),
+                            Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
+                    if (payload.length() > 3000) {
+                        payload = payload.substring(0, 3000);
+                    }
+                    URL url = new URL(BASE_URL + "api/android-crash-report/" + payload);
+                    HttpURLConnection connection =
+                            (HttpURLConnection) url.openConnection();
+                    connection.setConnectTimeout(2000);
+                    connection.setReadTimeout(2000);
+                    connection.connect();
+                    connection.getResponseCode(); // 404/401 olsa bile istek günlüğe düşer
+                    connection.disconnect();
+                    delivered = true;
+                } catch (Throwable ignored) {
+                    // Rapor gönderilemezse ekran zaten kullanıcıya açık.
+                }
+                markReportSent(delivered);
+            }
+        }, "crash-reporter").start();
+    }
+
+    private void markReportSent(final boolean delivered) {
+        final TextView view = crashView;
+        if (view == null) {
+            return;
+        }
+        view.post(new Runnable() {
+            @Override
+            public void run() {
+                view.append(delivered
+                        ? "\n\n✔ Rapor sunucuya gönderildi."
+                        : "\n\n✖ Rapor sunucuya gönderilemedi.");
+            }
+        });
     }
 
     // ----------------------------------------------------------------------
