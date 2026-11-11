@@ -27,4 +27,19 @@
     <string name="auth_error_message">Sunucu kimlik doğrulaması istedi. Varsayılan şifre “opencode-local” olmalı. Sunucu başka bir şifreyle başlatıldıysa “Sunucu şifresini gir” düğmesini kullan ya da uygulamayı sunucuyu kendisi başlatsın.</string>
 
     <string name="file_picker_failed">Dosya seçici açılamadı</string>
+
+    <string name="menu_title">İşlemler</string>
+    <string name="menu_reload">Yenile</string>
+    <string name="menu_change_model">Model değiştir</string>
+    <string name="menu_password">Sunucu şifresi</string>
+    <string name="menu_open_browser">Tarayıcıda aç</string>
+    <string name="menu_open_browser_failed">Tarayıcı açılamadı</string>
+
+    <string name="model_loading">Modeller yükleniyor…</string>
+    <string name="model_pick_title">Model seç</string>
+    <string name="model_no_session">Aktif oturum bulunamadı</string>
+    <string name="model_none">Kullanılabilir model yok</string>
+    <string name="model_changed">Model değiştirildi: %1$s</string>
+    <string name="model_change_failed">Model değiştirilemedi</string>
+    <string name="model_fetch_failed">Model listesi alınamadı</string>
 </resources>

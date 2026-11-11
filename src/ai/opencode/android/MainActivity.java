@@ -268,7 +268,7 @@ public class MainActivity extends Activity {
     private void showCrash(Throwable t) {
         StringWriter trace = new StringWriter();
         t.printStackTrace(new PrintWriter(trace));
-        final String report = "v1.0.6\n"
+        final String report = "v1.0.7\n"
                 + t.getClass().getName() + ": " + t.getMessage()
                 + "\n\n" + trace.toString();
 
@@ -795,7 +795,52 @@ public class MainActivity extends Activity {
                 web.reload();
             }
         });
+        button.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                showQuickMenu();
+                return true;
+            }
+        });
         return button;
+    }
+
+    /** Yenileme düğmesine uzun basınca açılan hızlı menü. */
+    private void showQuickMenu() {
+        final CharSequence[] items = new CharSequence[]{
+                getString(R.string.menu_reload),
+                getString(R.string.menu_change_model),
+                getString(R.string.menu_password),
+                getString(R.string.menu_open_browser)
+        };
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.menu_title)
+                .setItems(items, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        if (which == 0) {
+                            if (web != null) web.reload();
+                        } else if (which == 1) {
+                            showModelPicker();
+                        } else if (which == 2) {
+                            showPasswordDialog();
+                        } else if (which == 3) {
+                            openInBrowser();
+                        }
+                    }
+                })
+                .show();
+    }
+
+    private void openInBrowser() {
+        String url = (proxyPort > 0)
+                ? "http://" + HOST + ":" + proxyPort + "/"
+                : BASE_URL;
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Exception e) {
+            Toast.makeText(this, R.string.menu_open_browser_failed, Toast.LENGTH_SHORT).show();
+        }
     }
 
     // ----------------------------------------------------------------------
@@ -1063,6 +1108,193 @@ public class MainActivity extends Activity {
                 return false;
             }
         }
+    }
+
+    // ----------------------------------------------------------------------
+    // Model değiştirme (sunucu API'si üzerinden)
+    // ----------------------------------------------------------------------
+
+    /** Sunucuya doğrudan (4096) kimlik bilgisiyle HTTP isteği yapar. */
+    private String apiCall(String method, String path, String body) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection)
+                new URL("http://" + HOST + ":" + PORT + path).openConnection();
+        conn.setRequestMethod(method);
+        conn.setConnectTimeout(6000);
+        conn.setReadTimeout(12000);
+        conn.setRequestProperty("Authorization", basicAuthorization());
+        conn.setRequestProperty("Accept", "application/json");
+        if (body != null) {
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            conn.setDoOutput(true);
+            OutputStream os = conn.getOutputStream();
+            os.write(body.getBytes("UTF-8"));
+            os.close();
+        }
+        int code = conn.getResponseCode();
+        InputStream is = (code >= 200 && code < 300)
+                ? conn.getInputStream() : conn.getErrorStream();
+        StringBuilder sb = new StringBuilder();
+        if (is != null) {
+            java.io.BufferedReader br = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(is, "UTF-8"));
+            String line;
+            while ((line = br.readLine()) != null) {
+                sb.append(line);
+            }
+            br.close();
+        }
+        conn.disconnect();
+        if (code < 200 || code >= 300) {
+            throw new IOException("HTTP " + code);
+        }
+        return sb.toString();
+    }
+
+    /** Modelleri listeler ve seçileni geçerli oturuma uygular. */
+    private void showModelPicker() {
+        Toast.makeText(this, R.string.model_loading, Toast.LENGTH_SHORT).show();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    String sessionId = findTargetSessionId();
+                    if (sessionId == null) {
+                        postToast(getString(R.string.model_no_session));
+                        return;
+                    }
+                    String raw = apiCall("GET", "/api/model", null);
+                    org.json.JSONObject root = new org.json.JSONObject(raw);
+                    org.json.JSONArray data = root.optJSONArray("data");
+                    if (data == null || data.length() == 0) {
+                        postToast(getString(R.string.model_none));
+                        return;
+                    }
+
+                    final ArrayList<String> labels = new ArrayList<String>();
+                    final ArrayList<String> modelIds = new ArrayList<String>();
+                    final ArrayList<String> providerIds = new ArrayList<String>();
+                    final ArrayList<String> variants = new ArrayList<String>();
+
+                    for (int i = 0; i < data.length(); i++) {
+                        org.json.JSONObject m = data.optJSONObject(i);
+                        if (m == null) continue;
+                        if (!m.optBoolean("enabled", true)) continue;
+                        String status = m.optString("status", "active");
+                        if (!"active".equals(status) && !"beta".equals(status)) continue;
+                        String id = m.optString("id", m.optString("modelID", ""));
+                        String pid = m.optString("providerID", "opencode");
+                        String name = m.optString("name", id);
+                        if (id.length() == 0) continue;
+
+                        org.json.JSONArray vs = m.optJSONArray("variants");
+                        if (vs != null && vs.length() > 0) {
+                            for (int j = 0; j < vs.length(); j++) {
+                                org.json.JSONObject v = vs.optJSONObject(j);
+                                String vid = (v != null) ? v.optString("id", "") : "";
+                                if (vid.length() == 0) continue;
+                                labels.add(name + " (" + vid + ")");
+                                modelIds.add(id);
+                                providerIds.add(pid);
+                                variants.add(vid);
+                            }
+                        } else {
+                            labels.add(name);
+                            modelIds.add(id);
+                            providerIds.add(pid);
+                            variants.add("");
+                        }
+                    }
+
+                    if (labels.isEmpty()) {
+                        postToast(getString(R.string.model_none));
+                        return;
+                    }
+
+                    final String targetSession = sessionId;
+                    final CharSequence[] items = labels.toArray(new CharSequence[labels.size()]);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            new AlertDialog.Builder(MainActivity.this)
+                                    .setTitle(R.string.model_pick_title)
+                                    .setItems(items, new DialogInterface.OnClickListener() {
+                                        @Override
+                                        public void onClick(DialogInterface dialog, int which) {
+                                            applyModel(targetSession,
+                                                    modelIds.get(which),
+                                                    providerIds.get(which),
+                                                    variants.get(which),
+                                                    String.valueOf(items[which]));
+                                        }
+                                    })
+                                    .setNegativeButton(R.string.auth_cancel, null)
+                                    .show();
+                        }
+                    });
+                } catch (Exception e) {
+                    postToast(getString(R.string.model_fetch_failed));
+                }
+            }
+        }).start();
+    }
+
+    /** En güncel oturumun kimliğini döndürür (yoksa null). */
+    private String findTargetSessionId() throws Exception {
+        String raw = apiCall("GET", "/api/session", null);
+        org.json.JSONObject root = new org.json.JSONObject(raw);
+        org.json.JSONArray data = root.optJSONArray("data");
+        if (data == null || data.length() == 0) return null;
+        String bestId = null;
+        long bestTime = -1;
+        for (int i = 0; i < data.length(); i++) {
+            org.json.JSONObject s = data.optJSONObject(i);
+            if (s == null) continue;
+            String id = s.optString("id", "");
+            if (id.length() == 0) continue;
+            org.json.JSONObject t = s.optJSONObject("time");
+            long u = 0;
+            if (t != null) {
+                u = t.optLong("updated", t.optLong("viewed", t.optLong("created", 0)));
+            }
+            if (bestId == null || u >= bestTime) {
+                bestTime = u;
+                bestId = id;
+            }
+        }
+        return bestId;
+    }
+
+    /** Seçilen modeli belirtilen oturuma uygular. */
+    private void applyModel(final String sessionId, final String modelId,
+            final String providerId, final String variant, final String label) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    org.json.JSONObject model = new org.json.JSONObject();
+                    model.put("id", modelId);
+                    model.put("providerID", providerId);
+                    if (variant != null && variant.length() > 0) {
+                        model.put("variant", variant);
+                    }
+                    org.json.JSONObject body = new org.json.JSONObject();
+                    body.put("model", model);
+                    apiCall("POST", "/api/session/" + sessionId + "/model", body.toString());
+                    postToast(getString(R.string.model_changed, label));
+                } catch (Exception e) {
+                    postToast(getString(R.string.model_change_failed));
+                }
+            }
+        }).start();
+    }
+
+    private void postToast(final String msg) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                Toast.makeText(MainActivity.this, msg, Toast.LENGTH_SHORT).show();
+            }
+        });
     }
 
     // ----------------------------------------------------------------------
