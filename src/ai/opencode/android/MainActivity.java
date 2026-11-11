@@ -27,6 +27,9 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
+
 /**
  * OpenCode for Android
  *
@@ -88,7 +91,15 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        installCrashReporter();
+        try {
+            setupUi();
+        } catch (Throwable t) {
+            showCrash(t);
+        }
+    }
 
+    private void setupUi() {
         Window window = getWindow();
         window.setStatusBarColor(0xFF0B0D10);
         window.setNavigationBarColor(0xFF0B0D10);
@@ -164,6 +175,49 @@ public class MainActivity extends Activity {
 
         setContentView(root);
         web.loadUrl(BASE_URL);
+    }
+
+    // ----------------------------------------------------------------------
+    // Çökme raporlayıcı — hata olursa uygulama kapanmak yerine ekranda
+    // hatanın tam metnini gösterir.
+    // ----------------------------------------------------------------------
+
+    private void installCrashReporter() {
+        final Thread.UncaughtExceptionHandler previous =
+                Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
+            @Override
+            public void uncaughtException(Thread thread, final Throwable ex) {
+                try {
+                    showCrash(ex);
+                } catch (Throwable ignored) {
+                    // Raporlayıcı kendisi hata verirse sessizce geç.
+                }
+                if (Looper.myLooper() == Looper.getMainLooper()) {
+                    // Ana iş parçacığı çöktü: döngüyü yeniden başlatarak
+                    // uygulamanın anında kapanmasını engelle; hata ekranda kalsın.
+                    Looper.loop();
+                } else if (previous != null) {
+                    previous.uncaughtException(thread, ex);
+                }
+            }
+        });
+    }
+
+    private void showCrash(Throwable t) {
+        StringWriter trace = new StringWriter();
+        t.printStackTrace(new PrintWriter(trace));
+
+        TextView view = new TextView(this);
+        view.setBackgroundColor(0xFF140505);
+        view.setTextColor(0xFFFF7B72);
+        view.setTypeface(Typeface.MONOSPACE);
+        view.setTextSize(11);
+        view.setPadding(dp(12), dp(20), dp(12), dp(16));
+        view.setText("⚠ Uygulama bir hatayla karşılaştı.\n\n"
+                + "Sorunu çözmek için bu metni geliştiriciye ilet:\n\n"
+                + trace.toString());
+        setContentView(view);
     }
 
     // ----------------------------------------------------------------------
