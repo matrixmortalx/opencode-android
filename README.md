@@ -12,12 +12,16 @@ gerek yoktur.
 ## Nasıl çalışır?
 
 ```
-┌────────────────────────────┐              ┌───────────────────────────────┐
-│  OpenCode (APK)            │    HTTP      │  Termux                       │
-│                            │ ⇄ http://   │                               │
-│  WebView tabanlı uygulama   │  127.0.0.1  │  opencode serve --port 4096  │
-│  (tam ekran web arayüzü)    │    :4096    │  (arka plan servisi)          │
-└────────────────────────────┘              └───────────────────────────────┘
+┌─────────────────────────────┐             ┌───────────────────────────────┐
+│  OpenCode (APK)             │   HTTP      │  Termux                       │
+│                             │ ⇄ http://  │                               │
+│  WebView (tam ekran web     │  127.0.0.1 │  opencode serve --port 4096   │
+│  arayüzü)                   │   :4097     │  (arka plan servisi)          │
+│      ⇅                      │             └───────────────▲───────────────┘
+│  yerel kimlik doğrulama     │─── Authorization: Basic ─────┘
+│  proxy'si (tüm isteklere    │     başlığı eklenir
+│  şifreyi otomatik ekler)    │
+└─────────────────────────────┘
 ```
 
 - Trafik telefonun **loopback adresi** üzerinden akar; hiçbir veri internete gönderilmez.
@@ -37,10 +41,18 @@ gerek yoktur.
 | Kullanıcı adı | `opencode` |
 | Varsayılan şifre | `opencode-local` |
 
-Uygulama, API isteklerinde bu bilgileri HTTP Basic kimlik doğrulamasıyla
-otomatik gönderir. Sunucuyu elle farklı bir şifreyle başlattıysan uygulama
-şifre ekranını gösterir; **“Sunucu şifresini gir”** düğmesiyle şifreyi
-güncelleyebilirsin (uygulama şifreyi cihazda saklar).
+Uygulama bu bilgileri nasıl kullanır? WebView'in HTTP Basic desteği sayfanın
+kendi `fetch`/XHR isteklerini kapsamadığı için, uygulama **127.0.0.1 üzerinde
+küçük bir yerel proxy** (tercihen port 4097) açar: WebView bu proxy'ye
+bağlanır, proxy her isteğe `Authorization: Basic …` başlığı ekleyip 4096'daki
+sunucuya iletir. Böylece arayüzün TÜM trafiği — API çağrıları, dosya
+yüklemeleri ve `/api/event` SSE akışı dahil — şeffaf biçimde kimlik
+doğrulanır ve OpenCode'un kendi giriş ekranı hiç görünmez.
+
+Sunucuyu elle farklı bir şifreyle başlattıysan uygulama şifre ekranını
+gösterir; **“Sunucu şifresini gir”** düğmesiyle şifreyi
+güncelleyebilirsin (uygulama şifreyi cihazda saklar ve proxy yeni şifreyle
+devam eder).
 
 Kendi şifreni sabitlemek için Termux’ta:
 

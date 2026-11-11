@@ -36,10 +36,20 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.BufferedInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * OpenCode for Android
@@ -54,6 +64,13 @@ public class MainActivity extends Activity {
     private static final String HOST = "127.0.0.1";
     private static final int PORT = 4096;
     private static final String BASE_URL = "http://" + HOST + ":" + PORT + "/";
+
+    /**
+     * Uygulama içi yerel proxy'nin tercih ettiği port. Sabit tutulur ki
+     * arayüzün localStorage'ı her açılışta aynı origin'i görsün; port
+     * meşgulse otomatik olarak geçici bir port kullanılır.
+     */
+    private static final int PROXY_PORT = 4097;
 
     /** Uygulamanın "başlat" düğmesinin Termux'ta çalıştırdığı betik. */
     private static final String RUN_SCRIPT =
@@ -86,6 +103,17 @@ public class MainActivity extends Activity {
 
     private SharedPreferences prefs;
     private boolean authAttempted = false;
+
+    /**
+     * Yerel proxy: WebView'ın TÜM isteklerine (fetch/XHR ve SSE akışları
+     * dahil) Basic kimlik bilgisini ekleyip 4096'daki sunucuya iletir.
+     * WebView'in onReceivedHttpAuthRequest geri çağrısı sayfanın kendi
+     * fetch isteklerini kapsamadığı için gereklidir; proxy sayesinde
+     * OpenCode arayüzünün kendi giriş ekranı hiç belirmez.
+     */
+    private ServerSocket proxyServer;
+    private int proxyPort = -1;
+    private volatile boolean proxyAuthFailureNotified = false;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean lastMainFrameError = false;
@@ -198,7 +226,8 @@ public class MainActivity extends Activity {
         root.addView(fab, fabParams);
 
         setContentView(root);
-        web.loadUrl(BASE_URL);
+        startProxy();
+        web.loadUrl(getAppUrl());
     }
 
     // ----------------------------------------------------------------------
@@ -231,7 +260,7 @@ public class MainActivity extends Activity {
     private void showCrash(Throwable t) {
         StringWriter trace = new StringWriter();
         t.printStackTrace(new PrintWriter(trace));
-        final String report = "v1.0.4\n"
+        final String report = "v1.0.5\n"
                 + t.getClass().getName() + ": " + t.getMessage()
                 + "\n\n" + trace.toString();
 
@@ -305,9 +334,10 @@ public class MainActivity extends Activity {
                     if (payload.length() > 1800) {
                         payload = payload.substring(0, 1800);
                     }
-                    URL url = new URL(BASE_URL + "api/android-crash-report/" + payload);
+                    URL url = new URL(getAppUrl() + "api/android-crash-report/" + payload);
                     HttpURLConnection connection =
                             (HttpURLConnection) url.openConnection();
+                    connection.setRequestProperty("Authorization", basicAuthorization());
                     connection.setConnectTimeout(2000);
                     connection.setReadTimeout(2000);
                     connection.connect();
@@ -337,6 +367,304 @@ public class MainActivity extends Activity {
                         : "\n\n✖ Rapor gönderilemedi: " + failure);
             }
         });
+    }
+
+    // ----------------------------------------------------------------------
+    // Yerel kimlik doğrulama proxy'si
+    //
+    // WebView, sayfanın kendi fetch/XHR isteklerinde HTTP Basic kimlik
+    // doğrulamasını sormaz; bu yüzden arayüz 401 alıp kendi giriş ekranını
+    // gösteriyordu. Çözüm: uygulama 127.0.0.1 üzerinde minik bir HTTP
+    // proxy açar (tercihen 4097), WebView bu proxy'ye bağlanır, proxy her
+    // isteğe "Authorization: Basic ..." başlığı ekleyip gerçek sunucuya
+    // (4096) iletir. Böylece tarayıcı tarafındaki TÜM trafik — arayüzün
+    // API çağrıları, dosya yüklemeleri ve /api/event SSE akışı dahil —
+    // şeffaf biçimde kimlik doğrulanmış olur.
+    // ----------------------------------------------------------------------
+
+    /** WebView'ın yükleyeceği adres: proxy çalışıyorsa proxy, yoksa sunucu. */
+    private String getAppUrl() {
+        return proxyPort > 0
+                ? "http://" + HOST + ":" + proxyPort + "/"
+                : BASE_URL;
+    }
+
+    private String currentPassword() {
+        return prefs != null
+                ? prefs.getString(PREF_PASSWORD, DEFAULT_PASSWORD)
+                : DEFAULT_PASSWORD;
+    }
+
+    private String basicAuthorization() {
+        String raw = AUTH_USER + ":" + currentPassword();
+        byte[] bytes;
+        try {
+            bytes = raw.getBytes("UTF-8");
+        } catch (java.io.UnsupportedEncodingException e) {
+            bytes = raw.getBytes();
+        }
+        return "Basic " + Base64.encodeToString(bytes, Base64.NO_WRAP);
+    }
+
+    private void startProxy() {
+        if (proxyServer != null) {
+            return;
+        }
+        try {
+            try {
+                proxyServer = new ServerSocket(PROXY_PORT, 64,
+                        InetAddress.getByName(HOST));
+            } catch (IOException busy) {
+                // Port meşgulse (ör. eski bir uygulama örneği) geçici port.
+                proxyServer = new ServerSocket(0, 64, InetAddress.getByName(HOST));
+            }
+            proxyPort = proxyServer.getLocalPort();
+            Thread acceptor = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    while (proxyServer != null && !proxyServer.isClosed()) {
+                        try {
+                            final Socket client = proxyServer.accept();
+                            Thread worker = new Thread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    handleProxyClient(client);
+                                }
+                            }, "oc-proxy-client");
+                            worker.setDaemon(true);
+                            worker.start();
+                        } catch (IOException e) {
+                            break; // Proxy kapatıldı.
+                        }
+                    }
+                }
+            }, "oc-proxy-accept");
+            acceptor.setDaemon(true);
+            acceptor.start();
+        } catch (Throwable t) {
+            proxyServer = null;
+            proxyPort = -1; // Doğrudan bağlantıya geri dön (v1.0.4 davranışı).
+        }
+    }
+
+    private void stopProxy() {
+        ServerSocket server = proxyServer;
+        proxyServer = null;
+        proxyPort = -1;
+        if (server != null) {
+            try {
+                server.close();
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
+    /** Proxy 401 gördüğünde (şifre yanlış) şifre ekranını bir kez gösterir. */
+    private void notifyProxyAuthFailure() {
+        if (proxyAuthFailureNotified) {
+            return;
+        }
+        proxyAuthFailureNotified = true;
+        handler.post(new Runnable() {
+            @Override
+            public void run() {
+                showAuthError();
+            }
+        });
+    }
+
+    private void handleProxyClient(Socket client) {
+        Socket upstream = null;
+        try {
+            client.setSoTimeout(60000); // İstek fazı için makul üst sınır.
+            BufferedInputStream clientIn =
+                    new BufferedInputStream(client.getInputStream());
+
+            String requestLine = readHttpLine(clientIn);
+            if (requestLine == null || requestLine.length() == 0) {
+                return;
+            }
+            String[] parts = requestLine.split(" ");
+            if (parts.length < 3) {
+                return;
+            }
+            String method = parts[0];
+            String target = parts[1];
+            // Nadir: mutlak biçimli (proxy stili) istek satırını kök biçimine indir.
+            if (target.startsWith("http://") || target.startsWith("https://")) {
+                int pathStart = target.indexOf('/', target.indexOf("//") + 2);
+                target = pathStart >= 0 ? target.substring(pathStart) : "/";
+            }
+
+            List<String> requestHeaders = new ArrayList<>();
+            String contentLengthHeader = null;
+            String headerLine;
+            while ((headerLine = readHttpLine(clientIn)) != null
+                    && headerLine.length() > 0) {
+                requestHeaders.add(headerLine);
+                int colon = headerLine.indexOf(':');
+                if (colon > 0 && headerLine.substring(0, colon).trim()
+                        .equalsIgnoreCase("content-length")) {
+                    contentLengthHeader = headerLine.substring(colon + 1).trim();
+                }
+            }
+
+            long bodyLength = 0L;
+            if (contentLengthHeader != null) {
+                try {
+                    bodyLength = Long.parseLong(contentLengthHeader);
+                } catch (NumberFormatException ignored) {
+                    bodyLength = 0L;
+                }
+            }
+
+            // Upstream kurulamazsa istemciye yanıt yazmadan soketi kapat:
+            // WebView bunu bağlantı hatası sayar, mevcut "sunucu kapalı"
+            // hata/bekleme ekranları aynen çalışmaya devam eder.
+            upstream = new Socket();
+            upstream.connect(new InetSocketAddress(HOST, PORT), 5000);
+            upstream.setTcpNoDelay(true);
+            OutputStream upstreamOut = upstream.getOutputStream();
+
+            StringBuilder out = new StringBuilder(512);
+            out.append(method).append(' ').append(target).append(' ')
+                    .append(parts[parts.length - 1]).append("\r\n");
+            out.append("Host: ").append(HOST).append(':').append(PORT).append("\r\n");
+            out.append("Authorization: ").append(basicAuthorization()).append("\r\n");
+            out.append("Connection: close\r\n");
+            for (String header : requestHeaders) {
+                int colon = header.indexOf(':');
+                if (colon <= 0) {
+                    continue;
+                }
+                String name = header.substring(0, colon).trim();
+                if (name.equalsIgnoreCase("host")
+                        || name.equalsIgnoreCase("connection")
+                        || name.equalsIgnoreCase("keep-alive")
+                        || name.equalsIgnoreCase("proxy-connection")
+                        || name.equalsIgnoreCase("proxy-authorization")
+                        || name.equalsIgnoreCase("authorization")
+                        || name.equalsIgnoreCase("te")
+                        || name.equalsIgnoreCase("trailer")
+                        || name.equalsIgnoreCase("upgrade")) {
+                    continue; // Bu başlıkları biz kendi değerlerimizle gönderiyoruz.
+                }
+                out.append(header).append("\r\n");
+            }
+            out.append("\r\n");
+            upstreamOut.write(out.toString().getBytes("UTF-8"));
+
+            if (bodyLength > 0L) {
+                copyExactly(clientIn, upstreamOut, bodyLength);
+            }
+            upstreamOut.flush();
+
+            BufferedInputStream upstreamIn =
+                    new BufferedInputStream(upstream.getInputStream());
+            String statusLine = readHttpLine(upstreamIn);
+            if (statusLine == null || statusLine.length() == 0) {
+                return;
+            }
+            List<String> responseHeaders = new ArrayList<>();
+            while ((headerLine = readHttpLine(upstreamIn)) != null
+                    && headerLine.length() > 0) {
+                responseHeaders.add(headerLine);
+            }
+
+            // Şifre yanlışsa sunucu 401 döner: şifre ekranını göster.
+            String[] statusParts = statusLine.split(" ");
+            if (statusParts.length >= 2 && "401".equals(statusParts[1])) {
+                notifyProxyAuthFailure();
+            }
+
+            OutputStream clientOut = client.getOutputStream();
+            StringBuilder response = new StringBuilder(512);
+            response.append(statusLine).append("\r\n");
+            response.append("Connection: close\r\n");
+            for (String header : responseHeaders) {
+                int colon = header.indexOf(':');
+                if (colon <= 0) {
+                    continue;
+                }
+                String name = header.substring(0, colon).trim();
+                if (name.equalsIgnoreCase("connection")
+                        || name.equalsIgnoreCase("keep-alive")
+                        || name.equalsIgnoreCase("proxy-connection")
+                        || name.equalsIgnoreCase("proxy-authenticate")) {
+                    continue;
+                }
+                response.append(header).append("\r\n");
+            }
+            response.append("\r\n");
+            clientOut.write(response.toString().getBytes("UTF-8"));
+            clientOut.flush();
+
+            // Gövdeyi (SSE akışları dahil) gerçek zamanlı aktar.
+            pump(upstreamIn, clientOut);
+        } catch (IOException ignored) {
+            // Bağlantı koptu ya da istemci vazgeçti: yapacak bir şey yok.
+        } catch (Throwable t) {
+            // Beklenmeyen hata: proxy asla uygulamayı çökertmemeli.
+        } finally {
+            closeQuietly(upstream);
+            closeQuietly(client);
+        }
+    }
+
+    private void closeQuietly(Socket socket) {
+        if (socket != null) {
+            try {
+                socket.close();
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
+    /** CRLF ile sonlanan tek HTTP başlık satırı okur. */
+    private String readHttpLine(InputStream in) throws IOException {
+        StringBuilder line = new StringBuilder(96);
+        int c;
+        while ((c = in.read()) != -1) {
+            if (c == '\n') {
+                int length = line.length();
+                if (length > 0 && line.charAt(length - 1) == '\r') {
+                    line.setLength(length - 1);
+                }
+                return line.toString();
+            }
+            if (line.length() > 16384) {
+                throw new IOException("HTTP header line too long");
+            }
+            line.append((char) c);
+        }
+        return line.length() == 0 ? null : line.toString();
+    }
+
+    /** Kaynaktan tam olarak {@code count} bayt okuyup karşıya yazar. */
+    private void copyExactly(InputStream in, OutputStream out, long count)
+            throws IOException {
+        byte[] buffer = new byte[8192];
+        long remaining = count;
+        while (remaining > 0) {
+            int read = in.read(buffer, 0, (int) Math.min(buffer.length, remaining));
+            if (read < 0) {
+                throw new IOException("early EOF reading request body");
+            }
+            out.write(buffer, 0, read);
+            remaining -= read;
+        }
+    }
+
+    /** Kaynak kapanana dek baytları karşıya akıtır (SSE için gerekli). */
+    private void pump(InputStream in, OutputStream out) throws IOException {
+        byte[] buffer = new byte[8192];
+        int read;
+        while ((read = in.read(buffer)) != -1) {
+            if (read > 0) {
+                out.write(buffer, 0, read);
+                out.flush();
+            }
+        }
     }
 
     // ----------------------------------------------------------------------
@@ -538,6 +866,7 @@ public class MainActivity extends Activity {
                                 String password = input.getText().toString();
                                 prefs.edit().putString(PREF_PASSWORD, password).apply();
                                 authAttempted = false;
+                                proxyAuthFailureNotified = false;
                                 hideError();
                                 web.reload();
                             }
@@ -621,6 +950,7 @@ public class MainActivity extends Activity {
         public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
             lastMainFrameError = false;
             authAttempted = false;
+            proxyAuthFailureNotified = false;
         }
 
         /**
@@ -701,6 +1031,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
+        stopProxy();
         if (web != null) {
             web.destroy();
             web = null;
